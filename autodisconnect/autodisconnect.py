@@ -15,17 +15,17 @@ class AutoDisconnect(commands.Cog):
     def __init__(self, bot: bot.Red):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=2113674295, force_registration=True)
-        self.config.register_guild(timeout=-1)
-        self.timeout: Dict[int, int] = {}
+        self.config.register_guild(timeouts={})
+        self.timeouts: Dict[int, Dict[int, int]] = {}  # guild_id -> {channel_id -> timeout}
 
     @commands.command(aliases=["autodisconnect"])
     @commands.guild_only()
     @commands.mod_or_permissions(manage_guild=True)
-    async def afkdisconnect(self, ctx: commands.Context, *, time: Union[int, bool]):
+    async def afkdisconnect(self, ctx: commands.Context, channel: discord.VoiceChannel, time: Union[int, bool]):
         """
-        Sets how long to wait before disconnecting an AFK member, in seconds.
+        Sets how long to wait before disconnecting a member in a specific channel, in seconds.
 
-        Set to -1 to disable.
+        Set to -1 to disable for the channel.
         """
         if isinstance(time, bool):
             time = 0 if time else -1
@@ -33,33 +33,36 @@ class AutoDisconnect(commands.Cog):
             raise commands.UserFeedbackCheckFailure(
                 "Time must be 0 or greater, or -1 to disable the feature"
             )
-        self.timeout[ctx.guild.id] = time
-        await self.config.guild(ctx.guild).timeout.set(time)
+        
+        guild_id = ctx.guild.id
+        channel_id = channel.id
+
+        if guild_id not in self.timeouts:
+            self.timeouts[guild_id] = await self.config.guild(ctx.guild).timeouts()
+
+        self.timeouts[guild_id][channel_id] = time
+        await self.config.guild(ctx.guild).timeouts.set(self.timeouts[guild_id])
         await ctx.tick()
 
     @commands.Cog.listener()
-    async def on_voice_state_update(
-        self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
-    ):
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         def check(m: discord.Member, b: discord.VoiceState, a: discord.VoiceState):
             if m != member:
                 return False
-            return a.channel != m.guild.afk_channel
+            return a.channel != after.channel
 
         if not after.channel:
             return
-        if not member.guild.afk_channel:
-            return
-        if before.channel == after.channel:
-            return
-        if after.channel != member.guild.afk_channel:
-            return
         if await self.bot.cog_disabled_in_guild(self, member.guild):
             return
-        if member.guild.id not in self.timeout:
-            self.timeout[member.guild.id] = await self.config.guild(member.guild).timeout()
 
-        timeout = self.timeout[member.guild.id]
+        guild_id = member.guild.id
+        channel_id = after.channel.id
+
+        if guild_id not in self.timeouts:
+            self.timeouts[guild_id] = await self.config.guild(member.guild).timeouts()
+
+        timeout = self.timeouts[guild_id].get(channel_id, -1)
         if timeout < 0:
             return
         if timeout > 0:
@@ -73,3 +76,7 @@ class AutoDisconnect(commands.Cog):
             await member.move_to(None)
         except discord.HTTPException:
             return
+
+# Add this to the main script to load the cog
+def setup(bot: bot.Red):
+    bot.add_cog(AutoDisconnect(bot))
