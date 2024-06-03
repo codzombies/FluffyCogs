@@ -76,7 +76,3 @@ class AutoDisconnect(commands.Cog):
             await member.move_to(None)
         except discord.HTTPException:
             return
-
-# Add this to the main script to load the cog
-def setup(bot: bot.Red):
-    bot.add_cog(AutoDisconnect(bot))
